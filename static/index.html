@@ -1,0 +1,373 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8" />
+  <title>Alfresco Explorer (Search API)</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <style>
+    :root { --bg:#0f172a; --panel:#111827; --muted:#94a3b8; --text:#e5e7eb; --accent:#22c55e; --danger:#ef4444; --border:#1f2937; }
+    body { margin:0; font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; background:var(--bg); color:var(--text); }
+    header { padding:16px 20px; border-bottom:1px solid var(--border); }
+    header h1 { margin:0; font-size:18px; }
+    .container { display:flex; gap:16px; padding:16px; }
+    .col { background:var(--panel); border:1px solid var(--border); border-radius:8px; padding:12px; }
+    .col h2 { margin:0 0 8px 0; font-size:14px; color:var(--muted); }
+    .sites { width:280px; }
+    .content { flex:1; min-width:0; }
+    .row { display:flex; gap:8px; align-items:center; margin-bottom:8px; }
+    input, select, button { background:#0b1220; color:var(--text); border:1px solid var(--border); border-radius:6px; padding:8px 10px; }
+    button { cursor:pointer; }
+    button.primary { background:var(--accent); color:#052e1b; border-color:#16a34a; }
+    button.ghost { background:transparent; }
+    ul { list-style:none; margin:0; padding:0; }
+    li { padding:8px; border-bottom:1px solid var(--border); display:flex; align-items:center; justify-content:space-between; gap:8px; }
+    li .meta { color:var(--muted); font-size:12px; }
+    .badge { font-size:11px; padding:2px 6px; border:1px solid var(--border); border-radius:999px; color:var(--muted); }
+    .breadcrumbs { display:flex; gap:6px; align-items:center; flex-wrap:wrap; margin-bottom:8px; }
+    .breadcrumbs button { font-size:12px; }
+    .section { margin-top:12px; }
+    .grid { display:grid; grid-template-columns: 1fr 1fr; gap:12px; }
+    .error { color:var(--danger); font-size:12px; }
+    .selected { border:1px dashed var(--accent); background:#052e1b22; }
+    .muted { color:var(--muted); }
+    .small { font-size:12px; }
+    .nowrap { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 60ch; display:inline-block; vertical-align:bottom; }
+    pre { white-space: pre-wrap; word-break: break-word; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>Alfresco Explorer (Search API)</h1>
+  </header>
+  <div class="container">
+    <div class="col sites">
+      <h2>Sites</h2>
+      <div class="row">
+        <input id="siteQuery" placeholder="Buscar site..." />
+        <button id="btnFindSites">Buscar</button>
+      </div>
+      <ul id="siteList"></ul>
+    </div>
+
+    <div class="col content">
+      <h2>Explorador</h2>
+      <div class="row small muted" id="siteInfo">Selecciona un site para cargar su Document Library</div>
+
+      <div class="section">
+        <div class="breadcrumbs" id="breadcrumbs"></div>
+        <div class="row">
+          <button id="btnUp" class="ghost">Subir</button>
+          <select id="viewType">
+            <option value="all">Carpetas y archivos</option>
+            <option value="folders">Solo carpetas</option>
+            <option value="files">Solo archivos</option>
+          </select>
+          <button id="btnReload">Recargar</button>
+        </div>
+        <ul id="childrenList"></ul>
+        <div class="row">
+          <button id="btnLoadMore">Cargar más</button>
+          <span id="childrenStatus" class="small muted"></span>
+        </div>
+      </div>
+
+      <div class="section">
+        <h2>Buscar documentos</h2>
+        <div class="grid">
+          <div class="row">
+            <input id="docQuery" placeholder="Nombre o texto..." style="width:100%" />
+          </div>
+          <div class="row">
+            <select id="scope">
+              <option value="currentFolder">En carpeta actual (recursivo)</option>
+              <option value="currentSite">En site seleccionado</option>
+              <option value="global">Global</option>
+            </select>
+            <button id="btnSearch" class="primary">Buscar</button>
+          </div>
+        </div>
+        <ul id="searchResults"></ul>
+        <div class="row">
+          <button id="btnMoreResults">Más resultados</button>
+          <span id="searchStatus" class="small muted"></span>
+        </div>
+      </div>
+
+      <div class="section">
+        <h2>Documento elegido (JSON con contenido)</h2>
+        <pre id="chosenDoc" class="small muted">{}</pre>
+      </div>
+
+      <div id="errors" class="error"></div>
+    </div>
+  </div>
+
+  <script>
+    const els = {
+      siteList: document.getElementById('siteList'),
+      siteQuery: document.getElementById('siteQuery'),
+      btnFindSites: document.getElementById('btnFindSites'),
+      siteInfo: document.getElementById('siteInfo'),
+      breadcrumbs: document.getElementById('breadcrumbs'),
+      btnUp: document.getElementById('btnUp'),
+      viewType: document.getElementById('viewType'),
+      btnReload: document.getElementById('btnReload'),
+      childrenList: document.getElementById('childrenList'),
+      btnLoadMore: document.getElementById('btnLoadMore'),
+      childrenStatus: document.getElementById('childrenStatus'),
+      docQuery: document.getElementById('docQuery'),
+      scope: document.getElementById('scope'),
+      btnSearch: document.getElementById('btnSearch'),
+      searchResults: document.getElementById('searchResults'),
+      btnMoreResults: document.getElementById('btnMoreResults'),
+      searchStatus: document.getElementById('searchStatus'),
+      chosenDoc: document.getElementById('chosenDoc'),
+      errors: document.getElementById('errors'),
+    };
+
+    const state = {
+      sites: [],
+      selectedSiteId: null,
+      documentLibraryFolderId: null,
+      navStack: [],
+      navNames: [],
+      childrenSkip: 0,
+      childrenLastCount: 0,
+      searchSkip: 0,
+    };
+
+    function fmtSize(bytes) {
+      if (!bytes && bytes !== 0) return '';
+      const mb = bytes / 1024 / 1024;
+      if (mb >= 1) return `${mb.toFixed(2)} MB`;
+      const kb = bytes / 1024;
+      if (kb >= 1) return `${kb.toFixed(1)} KB`;
+      return `${bytes} B`;
+    }
+
+    function showError(err) {
+      console.error(err);
+      els.errors.textContent = typeof err === 'string' ? err : (err?.message || JSON.stringify(err));
+      setTimeout(() => els.errors.textContent = '', 6000);
+    }
+
+    async function apiGet(url) {
+      const r = await fetch(url);
+      if (!r.ok) throw new Error(`${r.status} ${r.statusText}`);
+      return await r.json();
+    }
+
+    // Sites
+    async function loadSites() {
+      try {
+        els.siteList.innerHTML = '<li class="muted small">Cargando...</li>';
+        const q = encodeURIComponent(els.siteQuery.value || '');
+        const data = await apiGet(`/sites?maxItems=50&skipCount=0&q=${q}`);
+        state.sites = data.entries || [];
+        els.siteList.innerHTML = '';
+        if (state.sites.length === 0) {
+          els.siteList.innerHTML = '<li class="muted small">Sin resultados</li>';
+        }
+        for (const s of state.sites) {
+          const li = document.createElement('li');
+          li.innerHTML = `
+            <div>
+              <div><strong>${s.id}</strong> <span class="badge">${s.visibility || ''}</span></div>
+              <div class="meta nowrap" title="${s.title || ''}">${s.title || ''}</div>
+            </div>
+            <div><button data-site="${s.id}">Abrir</button></div>
+          `;
+          li.querySelector('button').onclick = () => selectSite(s.id);
+          els.siteList.appendChild(li);
+        }
+      } catch (e) { showError(e); }
+    }
+
+    async function selectSite(siteId) {
+      try {
+        state.selectedSiteId = siteId;
+        els.siteInfo.textContent = `Site seleccionado: ${siteId}`;
+        const dl = await apiGet(`/sites/${encodeURIComponent(siteId)}/document-library`);
+        state.documentLibraryFolderId = dl.id;
+        state.navStack = [dl.id];
+        state.navNames = [dl.name || 'documentLibrary'];
+        renderBreadcrumbs();
+        state.childrenSkip = 0;
+        els.childrenList.innerHTML = '';
+        await loadChildren(true);
+      } catch (e) { showError(e); }
+    }
+
+    function renderBreadcrumbs() {
+      els.breadcrumbs.innerHTML = '';
+      state.navNames.forEach((name, idx) => {
+        const btn = document.createElement('button');
+        btn.textContent = name || '(sin nombre)';
+        btn.onclick = async () => {
+          state.navStack = state.navStack.slice(0, idx + 1);
+          state.navNames = state.navNames.slice(0, idx + 1);
+          state.childrenSkip = 0;
+          els.childrenList.innerHTML = '';
+          await loadChildren(true);
+          renderBreadcrumbs();
+        };
+        els.breadcrumbs.appendChild(btn);
+        if (idx < state.navNames.length - 1) {
+          const sep = document.createElement('span');
+          sep.textContent = '›';
+          sep.className = 'muted';
+          els.breadcrumbs.appendChild(sep);
+        }
+      });
+    }
+
+    async function loadChildren(reset=false) {
+      if (!state.navStack.length) return;
+      const folderId = state.navStack[state.navStack.length - 1];
+      const type = els.viewType.value;
+      const maxItems = 50;
+      const skipCount = reset ? 0 : state.childrenSkip;
+      try {
+        els.childrenStatus.textContent = 'Cargando...';
+        const url = `/folders/${encodeURIComponent(folderId)}/children?type=${type}&maxItems=${maxItems}&skipCount=${skipCount}`;
+        const data = await apiGet(url);
+        const entries = data.entries || [];
+        if (reset) els.childrenList.innerHTML = '';
+
+        entries.sort((a, b) => (b.isFolder ? 0 : 1) - (a.isFolder ? 0 : 1) || a.name.localeCompare(b.name));
+
+        for (const e of entries) {
+          const li = document.createElement('li');
+          if (e.isFolder) {
+            li.innerHTML = `
+              <div>
+                <strong>📁 ${e.name}</strong>
+                <div class="meta nowrap">${e.path || ''}</div>
+              </div>
+              <div><button data-id="${e.id}">Abrir</button></div>
+            `;
+            li.querySelector('button').onclick = async () => {
+              state.navStack.push(e.id);
+              state.navNames.push(e.name || 'folder');
+              renderBreadcrumbs();
+              state.childrenSkip = 0;
+              els.childrenList.innerHTML = '';
+              await loadChildren(true);
+            };
+          } else {
+            const size = fmtSize(e.sizeInBytes);
+            li.innerHTML = `
+              <div>
+                <strong>📄 ${e.name}</strong>
+                <div class="meta nowrap">${e.mimeType || ''} ${size ? '• '+size : ''}</div>
+              </div>
+              <div>
+                <span class="badge" title="${e.id}">${e.id.slice(0,8)}…</span>
+                <button class="primary">Elegir</button>
+              </div>
+            `;
+            li.querySelector('button.primary').onclick = () => chooseDoc(e);
+          }
+          els.childrenList.appendChild(li);
+        }
+
+        state.childrenLastCount = entries.length;
+        state.childrenSkip = skipCount + entries.length;
+        els.childrenStatus.textContent = `Mostrando ${state.childrenSkip} ${entries.length ? '' : '(sin nuevos elementos)'}`;
+      } catch (e) { showError(e); }
+    }
+
+    async function chooseDoc(doc) {
+      for (const li of els.childrenList.querySelectorAll('li')) li.classList.remove('selected');
+      for (const li of els.searchResults.querySelectorAll('li')) li.classList.remove('selected');
+
+      const markSelection = (container) => {
+        for (const li of container.children) {
+          const badge = li.querySelector('.badge');
+          if (badge && badge.title === doc.id) {
+            li.classList.add('selected');
+            break;
+          }
+        }
+      };
+      markSelection(els.childrenList);
+      markSelection(els.searchResults);
+
+      try {
+        // Pide metadatos + contenido textual truncado
+        const maxChars = 50000; // ajustable
+        const full = await apiGet(`/documents/${encodeURIComponent(doc.id)}/full?maxChars=${maxChars}`);
+        els.chosenDoc.textContent = JSON.stringify(full, null, 2);
+      } catch (e) {
+        showError(e);
+        els.chosenDoc.textContent = JSON.stringify(doc, null, 2);
+      }
+    }
+
+    async function runSearch(reset=false) {
+      const q = (els.docQuery.value || '').trim();
+      const scope = els.scope.value;
+      const maxItems = 20;
+      const skipCount = reset ? 0 : state.searchSkip;
+
+      const params = new URLSearchParams();
+      params.set('q', q);
+      params.set('maxItems', String(maxItems));
+      params.set('skipCount', String(skipCount));
+      params.set('includeSnippets', 'true');
+
+      if (scope === 'currentFolder' && state.navStack.length) {
+        params.set('folderId', state.navStack[state.navStack.length - 1]);
+      } else if (scope === 'currentSite' && state.selectedSiteId) {
+        params.set('siteIds', state.selectedSiteId);
+      }
+
+      try {
+        els.searchStatus.textContent = 'Buscando...';
+        const data = await apiGet(`/search/documents?${params.toString()}`);
+        const entries = data.entries || [];
+        if (reset) els.searchResults.innerHTML = '';
+        for (const e of entries) {
+          const size = fmtSize(e.sizeInBytes);
+          const li = document.createElement('li');
+          const snippet = e.snippets && e.snippets.length ? e.snippets[0] : '';
+          li.innerHTML = `
+            <div>
+              <div><strong>📄 ${e.name}</strong> <span class="badge" title="${e.id}">${e.id.slice(0,8)}…</span></div>
+              <div class="meta nowrap">${e.mimeType || ''} ${size ? '• '+size : ''}</div>
+              <div class="small muted nowrap" title="${e.path || ''}">${e.path || ''}</div>
+              ${snippet ? `<div class="small" style="margin-top:4px;color:#cbd5e1;">${snippet}</div>` : ''}
+            </div>
+            <div>
+              <button class="primary">Elegir</button>
+            </div>
+          `;
+          li.querySelector('button.primary').onclick = () => chooseDoc(e);
+          els.searchResults.appendChild(li);
+        }
+        state.searchSkip = skipCount + entries.length;
+        els.searchStatus.textContent = `Resultados mostrados: ${state.searchSkip}`;
+      } catch (e) { showError(e); }
+    }
+
+    els.btnFindSites.onclick = loadSites;
+    els.btnReload.onclick = () => loadChildren(true);
+    els.btnLoadMore.onclick = () => loadChildren(false);
+    els.btnUp.onclick = async () => {
+      if (state.navStack.length > 1) {
+        state.navStack.pop();
+        state.navNames.pop();
+        renderBreadcrumbs();
+        state.childrenSkip = 0;
+        els.childrenList.innerHTML = '';
+        await loadChildren(true);
+      }
+    };
+    els.viewType.onchange = () => { state.childrenSkip = 0; loadChildren(true); };
+    els.btnSearch.onclick = () => { state.searchSkip = 0; runSearch(true); };
+    els.btnMoreResults.onclick = () => runSearch(false);
+
+    loadSites();
+  </script>
+</body>
+</html>
