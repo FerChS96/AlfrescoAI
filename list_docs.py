@@ -6,15 +6,15 @@ from typing import Dict, List, Optional, Literal, Any, Tuple
 
 # Extracción de texto
 try:
-    from pypdf import PdfReader  # pip install pypdf
+    from pypdf import PdfReader 
 except Exception:
     PdfReader = None
 try:
-    from docx import Document  # pip install python-docx
+    from docx import Document 
 except Exception:
     Document = None
 try:
-    import chardet  # pip install chardet
+    import chardet  
 except Exception:
     chardet = None
 

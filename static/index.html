@@ -94,7 +94,13 @@
       </div>
 
       <div class="section">
-        <h2>Documento elegido (JSON con contenido)</h2>
+        <h2>Documento elegido (JSON)</h2>
+        <div class="row">
+          <label class="small">
+            <input type="checkbox" id="useMinimal" checked />
+            Usar proyección mínima para LLM (name, title, description, content)
+          </label>
+        </div>
         <pre id="chosenDoc" class="small muted">{}</pre>
       </div>
 
@@ -123,6 +129,7 @@
       searchStatus: document.getElementById('searchStatus'),
       chosenDoc: document.getElementById('chosenDoc'),
       errors: document.getElementById('errors'),
+      useMinimal: document.getElementById('useMinimal'),
     };
 
     const state = {
@@ -294,10 +301,15 @@
       markSelection(els.searchResults);
 
       try {
-        // Pide metadatos + contenido textual truncado
         const maxChars = 50000; // ajustable
-        const full = await apiGet(`/documents/${encodeURIComponent(doc.id)}/full?maxChars=${maxChars}`);
-        els.chosenDoc.textContent = JSON.stringify(full, null, 2);
+        const minimal = !!(els.useMinimal && els.useMinimal.checked);
+        const base = `/documents/${encodeURIComponent(doc.id)}`;
+        const url = minimal
+          ? `${base}/minimal?maxChars=${maxChars}`
+          : `${base}/full?maxChars=${maxChars}`;
+
+        const data = await apiGet(url);
+        els.chosenDoc.textContent = JSON.stringify(data, null, 2);
       } catch (e) {
         showError(e);
         els.chosenDoc.textContent = JSON.stringify(doc, null, 2);
